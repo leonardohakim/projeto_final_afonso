@@ -1,0 +1,9 @@
+streamlit
+pandas
+clickhouse-connect
+psycopg2-binary
+boto3
+prometheus_client
+tenacity==8.2.3
+pytest==7.4.0
+pytest-mock==3.11.1

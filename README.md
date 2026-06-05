@@ -1,1 +1,136 @@
-# Gabriel-csilva-20261sre-projeto-final
+# 20261sre-projeto-final — Northwind ETL Platform
+
+Este repositório contém a entrega final para a disciplina **Cloud Computing e SRE — Visão Prática com AWS**. O projeto implementa um pipeline de dados ponta a ponta para o dataset Northwind, aplicando táticas arquiteturais para garantir resiliência, idempotência e observabilidade.
+
+## 1. Objeto do Projeto
+O objetivo deste projeto é construir uma plataforma de dados robusta para processar e analisar pedidos do ecossistema Northwind (distribuição de alimentos). O sistema realiza a ingestão de pedidos (`orders`) e itens de pedidos (`order_details`), transforma os dados brutos para um formato analítico e disponibiliza métricas de negócio via dashboard interativo.
+
+## 2. Arquitetura Adotada
+A arquitetura segue o princípio de desacoplamento e camadas (Bronze/Silver). Devido a restrições técnicas locais, o "Data Lakehouse" foi simulado utilizando arquivos CSV locais como camada Bronze, processados por um motor ETL em Python.
+
+### Diagrama de Arquitetura
+```mermaid
+graph TD
+    subgraph Bronze_Layer [Bronze Layer - Raw Data]
+        A[CSVs Northwind]
+    end
+
+    subgraph Processing [ETL Engine - Python]
+        B[scripts/etl.py]
+        B1[Limpeza e Tipagem]
+        B2[Garantia de Idempotência]
+    end
+
+    subgraph Analytical_Layer [Silver Layer - Data Warehouse]
+        C[(ClickHouse - OLAP)]
+        D[(Postgres - Relacional)]
+    end
+
+    subgraph Presentation [Visualization]
+        E[Streamlit Dashboard]
+    end
+
+    A --> B
+    B --> B1
+    B1 --> B2
+    B2 --> C
+    B2 --> D
+    C --> E
+```
+
+### Justificativas Técnicas:
+*   **ClickHouse:** Escolhido como motor analítico principal devido à sua engine colunar vetorizada, permitindo agregações ultra-rápidas para o dashboard.
+*   **Postgres:** Mantido como cópia relacional para garantir compatibilidade com sistemas legados e integridade referencial estrita.
+*   **Python (Pandas):** Utilizado para a orquestração do ETL por sua flexibilidade em manipulação de tipos e tratamento de valores nulos.
+
+## 3. Modelagem de Dados
+O projeto utiliza o dataset Northwind, focado no relacionamento entre pedidos e seus itens.
+
+### Modelo Lógico (ER)
+```mermaid
+erDiagram
+    ORDERS {
+        int order_id PK
+        string customer_id
+        int employee_id
+        date order_date
+        date required_date
+        date shipped_date
+        int ship_via
+        float freight
+        string ship_name
+        string ship_address
+        string ship_city
+        string ship_region
+        string ship_postal_code
+        string ship_country
+    }
+    ORDER_DETAILS {
+        int order_id PK, FK
+        int product_id PK
+        float unit_price
+        int quantity
+        float discount
+    }
+    ORDERS ||--|{ ORDER_DETAILS : contains
+```
+
+## 4. Táticas Arquiteturais Aplicadas (Bass & ATAM)
+
+| Tática | Categoria | Implementação | Cenário ATAM Endereçado |
+| :--- | :--- | :--- | :--- |
+| **Idempotência** | Disponibilidade | Uso de `ReplacingMergeTree` no ClickHouse e `UPSERT` no Postgres. | Re-execução do pipeline após falha parcial sem duplicar registros. |
+| **Performance OLAP** | Desempenho | Armazenamento colunar no ClickHouse para o Dashboard. | Garantir latência < 2s em queries de agregação sobre grandes volumes. |
+| **Healthchecks** | Disponibilidade | `depends_on: condition: service_healthy` no Docker Compose. | Evitar race conditions no startup dos containers. |
+| **Fallback de Ingestão**| Resiliência | Pivoteamento dinâmico para CSV local na falha do MinIO. | Manter a operação do pipeline mesmo com indisponibilidade de serviços de storage. |
+
+## 5. Quick Start (Execução Local)
+
+O ambiente é totalmente orquestrado via Docker, garantindo que a stack esteja `up & running` em menos de 15 minutos.
+
+### Pré-requisitos:
+*   Docker e Docker Compose instalados.
+*   Python 3.11+.
+
+### Passo 1: Subir a Infraestrutura
+```bash
+docker-compose up -d
+```
+
+### Passo 2: Configurar o Banco de Dados
+```bash
+pip install clickhouse-connect psycopg2-binary pandas
+python3 scripts/db_setup.py
+```
+
+### Passo 3: Executar o Pipeline ETL
+```bash
+python3 scripts/etl.py
+```
+
+### Passo 4: Acessar o Dashboard
+Abra o navegador em: [http://localhost:8501](http://localhost:8501)
+
+## 6. Verificação e Validação
+
+### Testes Automatizados
+A suíte de testes (em desenvolvimento) valida as transformações de dados. Para rodar manualmente:
+```bash
+pytest tests/
+```
+
+### Verificação dos Dados
+Você pode validar a carga diretamente no ClickHouse:
+```bash
+# Acessar via HTTP Play interface: http://localhost:8123/play
+SELECT count() FROM northwind.orders;
+```
+
+## 7. Trade-offs e Aprendizados
+1.  **Batch vs Streaming:** Optamos por processamento em lote (micro-batch) via Python. Para o volume do Northwind (~100k/dia), a complexidade de um Kafka/Flink não se justificaria (Overengineering).
+2.  **Schema-on-Write:** Diferente da Aula 04 (Olist), aplicamos schema estrito na carga (Silver Layer) para garantir que o dashboard Streamlit nunca encontre dados malformados.
+3.  **Dívida Técnica:** Atualmente, a limpeza de dados é feita em memória (Pandas). Para volumes na escala de TB, precisaríamos migrar essa lógica para dentro do ClickHouse via `Buffer Tables`.
+
+---
+**Desenvolvido por:** Gabriel Silva
+**Turma:** 2026/1 - MBA Engenharia de Dados
