@@ -143,6 +143,22 @@ SELECT count() FROM northwind.orders;
 2.  **Schema-on-Write:** Diferente da Aula 04 (Olist), aplicamos schema estrito na carga (Silver Layer) para garantir que o dashboard Streamlit nunca encontre dados malformados.
 3.  **Dívida Técnica:** Atualmente, a limpeza de dados é feita em memória (Pandas). Para volumes na escala de TB, precisaríamos migrar essa lógica para dentro do ClickHouse via `Buffer Tables`.
 
+## 8. Entregáveis da Aula 05
+
+Os principais entregáveis desta etapa estão consolidados abaixo:
+
+*   **MinIO + Fallback:** o ETL tenta ler os CSVs do MinIO e, em caso de indisponibilidade, faz fallback automático para `spec/arquivos_csv_northwind`.
+*   **Suíte completa de testes pytest:** testes unitários e de integração organizados em `tests/unit/` e `tests/integration/`, com `conftest.py` para apoio de importações e execução.
+*   **Tabela ATAM:** análise consolidada em [documents/atam.md](documents/atam.md), cobrindo os 7 atributos de qualidade da Aula 05.
+*   **Circuit Breaker + Retry + Healthchecks:** proteção contra falhas transitórias nas cargas, com `tenacity`, `CircuitBreaker` e healthchecks nos serviços do Docker Compose.
+*   **Como rodar o projeto completo:**
+    1. `docker-compose up -d`
+    2. `python3 scripts/db_setup.py`
+    3. `python3 scripts/etl.py`
+    4. `python -m pytest tests/ -v --tb=short`
+
+Para a revisão final da entrega, o foco principal é garantir que a stack suba com saúde, o fallback MinIO funcione e a suíte de testes seja executada com sucesso no ambiente local.
+
 ---
 **Desenvolvido por:** Gabriel Silva
 **Turma:** 2026/1 - MBA Engenharia de Dados
