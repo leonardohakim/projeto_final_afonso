@@ -1,24 +1,25 @@
 # 20261sre-projeto-final — Northwind ETL Platform
 
-Este repositório contém a entrega final para a disciplina **Cloud Computing e SRE — Visão Prática com AWS**. O projeto implementa um pipeline de dados ponta a ponta para o dataset Northwind, aplicando táticas arquiteturais para garantir resiliência, idempotência e observabilidade.
+Este repositório contém a entrega final para a disciplina **Cloud Computing e SRE — Visão Prática com AWS**. O projeto implementa um pipeline de dados ponta a ponta para o dataset Northwind, aplicando táticas arquiteturais para garantir resiliência, idempotência, observabilidade e testabilidade.
 
 ## 1. Objeto do Projeto
 O objetivo deste projeto é construir uma plataforma de dados robusta para processar e analisar pedidos do ecossistema Northwind (distribuição de alimentos). O sistema realiza a ingestão de pedidos (`orders`) e itens de pedidos (`order_details`), transforma os dados brutos para um formato analítico e disponibiliza métricas de negócio via dashboard interativo.
 
 ## 2. Arquitetura Adotada
-A arquitetura segue o princípio de desacoplamento e camadas (Bronze/Silver). Devido a restrições técnicas locais, o "Data Lakehouse" foi simulado utilizando arquivos CSV locais como camada Bronze, processados por um motor ETL em Python.
+A arquitetura segue o princípio de desacoplamento e camadas (Bronze/Silver). A camada Bronze é atendida por MinIO como landing zone e, quando necessário, o ETL realiza fallback automático para os CSVs locais em `spec/arquivos_csv_northwind`, garantindo continuidade operacional mesmo com indisponibilidade do storage.
 
 ### Diagrama de Arquitetura
 ```mermaid
 graph TD
     subgraph Bronze_Layer [Bronze Layer - Raw Data]
-        A[CSVs Northwind]
+        A[MinIO / CSVs Northwind]
     end
 
     subgraph Processing [ETL Engine - Python]
         B[scripts/etl.py]
         B1[Limpeza e Tipagem]
-        B2[Garantia de Idempotência]
+        B2[Fallback MinIO -> CSV]
+        B3[Retry + Circuit Breaker]
     end
 
     subgraph Analytical_Layer [Silver Layer - Data Warehouse]
@@ -33,15 +34,18 @@ graph TD
     A --> B
     B --> B1
     B1 --> B2
-    B2 --> C
-    B2 --> D
+    B2 --> B3
+    B3 --> C
+    B3 --> D
     C --> E
 ```
 
 ### Justificativas Técnicas:
+*   **MinIO + fallback local:** O ETL tenta ler os arquivos do MinIO primeiro e, se a leitura falhar, usa automaticamente os CSVs locais para manter a ingestão disponível.
 *   **ClickHouse:** Escolhido como motor analítico principal devido à sua engine colunar vetorizada, permitindo agregações ultra-rápidas para o dashboard.
 *   **Postgres:** Mantido como cópia relacional para garantir compatibilidade com sistemas legados e integridade referencial estrita.
 *   **Python (Pandas):** Utilizado para a orquestração do ETL por sua flexibilidade em manipulação de tipos e tratamento de valores nulos.
+*   **CircuitBreaker + Retry:** As cargas em Postgres e ClickHouse combinam `tenacity` com `CircuitBreaker` para tolerar falhas transitórias sem ocultar falhas persistentes.
 
 ## 3. Modelagem de Dados
 O projeto utiliza o dataset Northwind, focado no relacionamento entre pedidos e seus itens.
@@ -82,7 +86,11 @@ erDiagram
 | **Idempotência** | Disponibilidade | Uso de `ReplacingMergeTree` no ClickHouse e `UPSERT` no Postgres. | Re-execução do pipeline após falha parcial sem duplicar registros. |
 | **Performance OLAP** | Desempenho | Armazenamento colunar no ClickHouse para o Dashboard. | Garantir latência < 2s em queries de agregação sobre grandes volumes. |
 | **Healthchecks** | Disponibilidade | `depends_on: condition: service_healthy` no Docker Compose. | Evitar race conditions no startup dos containers. |
-| **Fallback de Ingestão**| Resiliência | Pivoteamento dinâmico para CSV local na falha do MinIO. | Manter a operação do pipeline mesmo com indisponibilidade de serviços de storage. |
+| **Fallback de Ingestão** | Resiliência | Pivoteamento dinâmico para MinIO e, em falha, leitura automática dos CSVs locais. | Manter a operação do pipeline mesmo com indisponibilidade de serviços de storage. |
+
+### Documento ATAM Completo
+
+A análise completa dos atributos de qualidade da Aula 05 está consolidada em [documents/atam.md](documents/atam.md), com cobertura dos atributos Availability, Performance, Modifiability, Security, Deployability, Cost e Testability.
 
 ## 5. Quick Start (Execução Local)
 
@@ -103,6 +111,8 @@ pip install clickhouse-connect psycopg2-binary pandas
 python3 scripts/db_setup.py
 ```
 
+Se você quiser testar a origem remota do Bronze Layer, publique os CSVs no bucket do MinIO configurado no compose. Caso contrário, o ETL usa automaticamente os arquivos locais de `spec/arquivos_csv_northwind`.
+
 ### Passo 3: Executar o Pipeline ETL
 ```bash
 python3 scripts/etl.py
@@ -114,10 +124,12 @@ Abra o navegador em: [http://localhost:8501](http://localhost:8501)
 ## 6. Verificação e Validação
 
 ### Testes Automatizados
-A suíte de testes (em desenvolvimento) valida as transformações de dados. Para rodar manualmente:
+A suíte completa de testes pytest cobre o `CircuitBreaker`, o fallback de ingestão e o pipeline de carga em Postgres/ClickHouse, com cobertura acima de 85%. Para rodar manualmente:
 ```bash
-pytest tests/
+python -m pytest tests/ -v --tb=short
 ```
+
+Os testes estão organizados em `tests/unit/` e `tests/integration/`, com `tests/conftest.py` para preparar os imports do projeto e isolar os cenários de execução.
 
 ### Verificação dos Dados
 Você pode validar a carga diretamente no ClickHouse:
