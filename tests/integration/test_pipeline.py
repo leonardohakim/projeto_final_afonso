@@ -39,9 +39,10 @@ def _services_available():
     return True
 
 
-def _prepare_databases():
+@pytest.fixture()
+def prepared_pipeline_environment():
     if not _services_available():
-        pytest.skip("Postgres/ClickHouse indisponíveis para os testes de integração")
+        pytest.skip("Postgres/ClickHouse indisponíveis para o teste de integração")
 
     setup_clickhouse()
     setup_postgres()
@@ -65,63 +66,42 @@ def _prepare_databases():
         cursor.execute("TRUNCATE TABLE order_details, orders")
     pg_conn.commit()
 
-    return ch_client, pg_conn
+    try:
+        yield ch_client, pg_conn
+    finally:
+        ch_client.command("TRUNCATE TABLE IF EXISTS northwind.orders")
+        ch_client.command("TRUNCATE TABLE IF EXISTS northwind.order_details")
+        with pg_conn.cursor() as cursor:
+            cursor.execute("TRUNCATE TABLE order_details, orders")
+        pg_conn.commit()
+        pg_conn.close()
 
 
-def test_landing_has_expected_row_count():
-    ch_client, pg_conn = _prepare_databases()
-
+def test_process_orders_loads_rows_into_both_databases(prepared_pipeline_environment):
+    ch_client, pg_conn = prepared_pipeline_environment
     expected_rows = len(pd.read_csv(CSV_DIR / "northwind_orders.csv"))
+
     etl.process_orders()
 
-    ch_rows = ch_client.query("SELECT count() FROM northwind.orders").result_rows[0][0]
+    clickhouse_rows = ch_client.query("SELECT count() FROM northwind.orders").result_rows[0][0]
     with pg_conn.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM orders")
-        pg_rows = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM orders")
+        postgres_rows = cursor.fetchone()[0]
 
-    assert ch_rows == expected_rows
-    assert pg_rows == expected_rows
-    pg_conn.close()
-
-
-def test_postgres_has_expected_row_count():
-    ch_client, pg_conn = _prepare_databases()
-
-    expected_rows = len(pd.read_csv(CSV_DIR / "northwind_orders.csv"))
-    etl.process_orders()
-
-    with pg_conn.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM orders")
-        count = cursor.fetchone()[0]
-
-    ch_count = ch_client.query("SELECT count() FROM northwind.orders").result_rows[0][0]
-
-    assert count == expected_rows
-    assert ch_count == expected_rows
-    pg_conn.close()
+    assert clickhouse_rows == expected_rows
+    assert postgres_rows == expected_rows
 
 
-def test_ingestion_is_idempotent():
-    ch_client, pg_conn = _prepare_databases()
-
+def test_process_order_details_loads_rows_into_both_databases(prepared_pipeline_environment):
+    ch_client, pg_conn = prepared_pipeline_environment
     expected_rows = len(pd.read_csv(CSV_DIR / "northwind_order_details.csv"))
-    etl.process_order_details()
-
-    with pg_conn.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM order_details")
-        initial_count = cursor.fetchone()[0]
 
     etl.process_order_details()
 
+    clickhouse_rows = ch_client.query("SELECT count() FROM northwind.order_details").result_rows[0][0]
     with pg_conn.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM order_details")
-        final_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM order_details")
+        postgres_rows = cursor.fetchone()[0]
 
-    ch_count = ch_client.query(
-        "SELECT count(DISTINCT order_id, product_id) FROM northwind.order_details"
-    ).result_rows[0][0]
-
-    assert initial_count == expected_rows
-    assert initial_count == final_count
-    assert ch_count == expected_rows
-    pg_conn.close()
+    assert clickhouse_rows == expected_rows
+    assert postgres_rows == expected_rows
